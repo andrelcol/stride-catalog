@@ -1,0 +1,291 @@
+{
+  "intro": "Cada categoria STRIDE deixa rastros diferentes na AST: nós de chamada, literais, decorators, fluxo de dados e ausência de nós de proteção. As heurísticas abaixo ligam esses rastros a CAPEC/CWE para priorizar revisão de código.",
+  "astStrategy": {
+    "languages": ["python"],
+    "approach": "Percorrer a AST, marcar sinks (eval, SQL, subprocess, logs, crypto), sources (request, argv, files, env) e a ausência de guards (auth, authorization, size limits, parameterized queries).",
+    "limitations": "Padrões estruturais não substituem análise taint completa. Um achado é indício, não prova de vulnerabilidade."
+  },
+  "categories": [
+    {
+      "id": "S",
+      "name": "Spoofing",
+      "codeQuestion": "O código confia em identidade sem verificar origem, sessão ou credencial?",
+      "astFocus": [
+        "Literais de senha/token/chave",
+        "jwt.decode sem verificação de assinatura",
+        "Cookies de sessão sem flags",
+        "Rotas HTTP sem decorator de autenticação",
+        "Comparação de secrets com == em vez de compare_digest"
+      ],
+      "indicators": [
+        {
+          "id": "hardcoded-secret",
+          "title": "Credencial ou segredo embutido",
+          "description": "Assign de string literal para nomes password, secret, token, api_key, aws_secret. Na AST: ast.Assign / ast.AnnAssign com ast.Constant(str).",
+          "cwes": ["798", "259"],
+          "capecs": ["70", "555", "560"],
+          "severity": "high",
+          "detector": "hardcoded_secret"
+        },
+        {
+          "id": "unverified-jwt",
+          "title": "Token aceito sem validar assinatura",
+          "description": "Chamadas jwt.decode com verify=False ou options.verify_signature=False. Indica spoofing de identidade.",
+          "cwes": ["347", "287"],
+          "capecs": ["633", "196", "593"],
+          "severity": "high",
+          "detector": "unverified_jwt"
+        },
+        {
+          "id": "weak-secret-compare",
+          "title": "Comparação insegura de segredo",
+          "description": "password == request.form[...] é ast.Compare. Deve ser hmac.compare_digest para evitar timing e deixar a intenção de autenticação explícita.",
+          "cwes": ["208", "287"],
+          "capecs": ["16", "49"],
+          "severity": "medium",
+          "detector": "weak_secret_compare"
+        },
+        {
+          "id": "unauthenticated-route",
+          "title": "Rota sem autenticação visível",
+          "description": "Decorator @app.route / @router.get sem login_required, depends(auth) ou equivalente no mesmo decorator list.",
+          "cwes": ["306", "862"],
+          "capecs": ["115", "87", "1"],
+          "severity": "high",
+          "detector": "unauthenticated_route"
+        }
+      ]
+    },
+    {
+      "id": "T",
+      "name": "Tampering",
+      "codeQuestion": "Entrada externa chega a um sink de estado (SQL, arquivo, XML, config) sem sanitização estrutural?",
+      "astFocus": [
+        "Concatenação (+) ou f-string com palavras SQL",
+        "open()/Path com variável de request",
+        "xml.etree sem defusedxml",
+        "yaml.load sem Loader seguro",
+        "Hidden fields e cookies usados como estado confiável"
+      ],
+      "indicators": [
+        {
+          "id": "sql-concat",
+          "title": "SQL montado por concatenação",
+          "description": "ast.BinOp Add / ast.JoinedStr contendo SELECT|INSERT|UPDATE|DELETE|WHERE e um nome de variável. CAPEC-66 / CWE-89.",
+          "cwes": ["89"],
+          "capecs": ["66", "7", "109"],
+          "severity": "high",
+          "detector": "sql_concat"
+        },
+        {
+          "id": "unsafe-deserialize",
+          "title": "Desserialização insegura",
+          "description": "pickle.loads, yaml.load, marshal.loads. Alterar o payload altera o estado do processo.",
+          "cwes": ["502"],
+          "capecs": ["586", "221"],
+          "severity": "high",
+          "detector": "unsafe_deserialize"
+        },
+        {
+          "id": "xml-xxe",
+          "title": "Parser XML expansível",
+          "description": "xml.etree.ElementTree / xml.dom.minidom / lxml sem resolver entidades desabilitado. Tampering via XXE.",
+          "cwes": ["611", "776"],
+          "capecs": ["201", "228"],
+          "severity": "high",
+          "detector": "xml_parse"
+        },
+        {
+          "id": "path-join-user",
+          "title": "Caminho de arquivo influenciado por entrada",
+          "description": "open(os.path.join(base, user_input)) ou Path(base) / request.args. Indício de path traversal (CAPEC-126).",
+          "cwes": ["22", "73"],
+          "capecs": ["126", "139", "76"],
+          "severity": "high",
+          "detector": "path_join_user"
+        }
+      ]
+    },
+    {
+      "id": "R",
+      "name": "Repudiation",
+      "codeQuestion": "Ações sensíveis são registradas de forma íntegra, ou o atacante pode silenciar/forjar logs?",
+      "astFocus": [
+        "Ausência de logging em sinks privilegiados",
+        "logging com concatenação de entrada (log injection)",
+        "except: pass engolindo falhas de auditoria",
+        "Manipulação de arquivos de log"
+      ],
+      "indicators": [
+        {
+          "id": "log-injection",
+          "title": "Log com entrada não sanitizada",
+          "description": "logging.* ou print com f-string/concat de request, user, header. CAPEC-93 / CWE-117.",
+          "cwes": ["117", "93"],
+          "capecs": ["93", "81"],
+          "severity": "medium",
+          "detector": "log_injection"
+        },
+        {
+          "id": "swallowed-exception",
+          "title": "Exceção engolida",
+          "description": "ast.ExceptHandler com body só Pass/Ellipsis. Apaga evidência de falha e impede não-repúdio.",
+          "cwes": ["390", "778"],
+          "capecs": ["571", "268"],
+          "severity": "medium",
+          "detector": "swallowed_exception"
+        },
+        {
+          "id": "logging-disabled",
+          "title": "Logging desligado ou crítico omitido",
+          "description": "logging.disable, basicConfig(level=CRITICAL) ou ausência total de logger em módulos com auth/pagamento.",
+          "cwes": ["778"],
+          "capecs": ["571"],
+          "severity": "medium",
+          "detector": "logging_disabled"
+        }
+      ]
+    },
+    {
+      "id": "I",
+      "name": "Information Disclosure",
+      "codeQuestion": "O código vaza segredo, dado interno ou erro verboso para quem não deveria ver?",
+      "astFocus": [
+        "verify=False em TLS",
+        "debug=True",
+        "traceback.format_exc enviado na resposta",
+        "print/log de password, token, cookie",
+        "CORS allow_origins=['*']"
+      ],
+      "indicators": [
+        {
+          "id": "tls-verify-false",
+          "title": "TLS sem verificação",
+          "description": "requests/httpx/urllib com verify=False. Permite interceptação (CAPEC-94, CAPEC-217).",
+          "cwes": ["295", "319"],
+          "capecs": ["217", "94", "157"],
+          "severity": "high",
+          "detector": "tls_verify_false"
+        },
+        {
+          "id": "debug-enabled",
+          "title": "Modo debug em produção",
+          "description": "Flask/Django DEBUG True ou app.run(debug=True). Expõe stack e configuração.",
+          "cwes": ["489", "215"],
+          "capecs": ["215", "54"],
+          "severity": "medium",
+          "detector": "debug_enabled"
+        },
+        {
+          "id": "verbose-error",
+          "title": "Erro interno devolvido ao cliente",
+          "description": "Retorno de traceback.format_exc, str(e) ou repr(exception) em response/json.",
+          "cwes": ["209", "497"],
+          "capecs": ["54", "215"],
+          "severity": "medium",
+          "detector": "verbose_error"
+        },
+        {
+          "id": "secret-logged",
+          "title": "Segredo escrito em log",
+          "description": "logging de variáveis password/token/authorization/cookie.",
+          "cwes": ["532", "312"],
+          "capecs": ["37", "568"],
+          "severity": "high",
+          "detector": "secret_logged"
+        }
+      ]
+    },
+    {
+      "id": "D",
+      "name": "Denial of Service",
+      "codeQuestion": "Há alocação, loop ou parser cujo custo é controlado pelo atacante?",
+      "astFocus": [
+        "re.compile com padrão vindo do usuário (ReDoS)",
+        "read() / json.loads sem limite de tamanho",
+        "while True sem timeout",
+        "yaml/xml com entidades expansíveis",
+        "Ausência de rate limit em rotas públicas"
+      ],
+      "indicators": [
+        {
+          "id": "redos",
+          "title": "Regex com entrada do usuário",
+          "description": "re.compile/re.match/re.search cujo padrão é Nome/atributo, não literal. CAPEC-492 / CWE-1333.",
+          "cwes": ["1333", "400"],
+          "capecs": ["492", "130"],
+          "severity": "high",
+          "detector": "redos"
+        },
+        {
+          "id": "unbounded-read",
+          "title": "Leitura sem limite",
+          "description": "request.data, request.get_data(), file.read() sem nbytes. CAPEC-231.",
+          "cwes": ["400", "770"],
+          "capecs": ["231", "130", "488"],
+          "severity": "medium",
+          "detector": "unbounded_read"
+        },
+        {
+          "id": "unbounded-loop",
+          "title": "Loop potencialmente infinito",
+          "description": "while True sem break condicionado a timeout/contador em handlers de rede.",
+          "cwes": ["835", "400"],
+          "capecs": ["227", "25"],
+          "severity": "low",
+          "detector": "unbounded_loop"
+        }
+      ]
+    },
+    {
+      "id": "E",
+      "name": "Elevation of Privilege",
+      "codeQuestion": "Entrada do usuário alcança execução, objeto privilegiado ou decisão de autorização?",
+      "astFocus": [
+        "eval/exec/compile",
+        "subprocess com shell=True ou os.system",
+        "pickle.loads",
+        "Rotas administrativas sem checagem de papel",
+        "SSRF: requests.get(url_do_usuario)"
+      ],
+      "indicators": [
+        {
+          "id": "code-exec",
+          "title": "Execução dinâmica de código",
+          "description": "eval, exec, compile, __import__ com argumento não literal. CAPEC-242 / CWE-94.",
+          "cwes": ["94", "95"],
+          "capecs": ["242", "35", "175"],
+          "severity": "high",
+          "detector": "code_exec"
+        },
+        {
+          "id": "command-injection",
+          "title": "Comando de SO interpolado",
+          "description": "os.system, os.popen, subprocess.*(shell=True) ou lista montada com input. CAPEC-88.",
+          "cwes": ["78", "77"],
+          "capecs": ["88", "248", "6"],
+          "severity": "high",
+          "detector": "command_injection"
+        },
+        {
+          "id": "ssrf",
+          "title": "URL controlada em cliente HTTP",
+          "description": "requests.get/post(url) onde url não é literal. CAPEC-664 / CWE-918.",
+          "cwes": ["918"],
+          "capecs": ["664"],
+          "severity": "high",
+          "detector": "ssrf"
+        },
+        {
+          "id": "missing-authorization",
+          "title": "Operação privilegiada sem checagem de papel",
+          "description": "Decorator de rota contendo admin, delete, grant, sudo no path, sem authorize/role/permission no mesmo decorator list ou no body.",
+          "cwes": ["285", "862", "863"],
+          "capecs": ["1", "58", "122", "180"],
+          "severity": "high",
+          "detector": "missing_authorization"
+        }
+      ]
+    }
+  ]
+}

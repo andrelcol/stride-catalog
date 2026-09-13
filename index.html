@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STRIDE × CAPEC × CWE × CVE</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" href="favicon.png" type="image/png">
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <p class="eyebrow">Security Debt · correlação de ameaças</p>
+            <h1>STRIDE × CAPEC × CWE × CVE</h1>
+        </div>
+        <p class="source">Mapeamento CAPEC–STRIDE de <a href="https://medium.com/@brettcrawley/capec-stride-mapping-1aa83a058c5d" target="_blank" rel="noopener">Brett Crawley</a>, cruzado com MITRE CAPEC/CWE e CVE locais.</p>
+    </header>
+
+    <section class="stride-grid" id="strideGrid"></section>
+
+    <section class="filters">
+        <label>
+            Buscar
+            <input id="searchInput" type="search" placeholder="STRIDE, CAPEC-66, CWE-89, CVE-2024-… ou texto">
+        </label>
+        <label>
+            Tipo
+            <select id="typeFilter">
+                <option value="all">Todos</option>
+                <option value="capec">CAPEC</option>
+                <option value="cwe">CWE</option>
+                <option value="cve">CVE</option>
+            </select>
+        </label>
+        <p class="stats" id="statsLine">Carregando grafo…</p>
+    </section>
+
+    <main class="workspace">
+        <section class="list-pane">
+            <h2 id="listTitle">Resultados</h2>
+            <div id="results" class="results"></div>
+        </section>
+        <section class="detail-pane" id="detailPane">
+            <p class="placeholder">Selecione um item para ver CAPEC, CWE, CVE e como detectar no código.</p>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
