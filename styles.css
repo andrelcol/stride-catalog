@@ -183,10 +183,13 @@ input, select {
 
 .placeholder { color: var(--muted); }
 
-.heuristic {
+.heuristic, .why {
     border-top: 1px solid var(--line);
     padding: 12px 0;
 }
+
+.why p { color: var(--muted); font-size: 14px; margin: 8px 0 0; }
+.why p strong { color: var(--text); }
 
 .severity {
     text-transform: uppercase;

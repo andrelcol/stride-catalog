@@ -128,7 +128,7 @@ function selectFromHash() {
         return;
     }
     state.selected = parsed;
-    state.tab = "related";
+    state.tab = parsed.kind === "stride" ? "related" : "why";
     const related = relatedFor(parsed.kind, parsed.id);
     if (state.stride && related && !(related.stride || []).includes(state.stride)) {
         state.stride = null;
@@ -238,6 +238,249 @@ function catalogFor(related) {
     return rows;
 }
 
+const SCOPE_WHY = {
+    Confidentiality: { stride: "I", text: "Confidencialidade — dados visíveis para quem não deveria vê-los." },
+    Integrity: { stride: "T", text: "Integridade — dados, código ou estado são alterados." },
+    Availability: { stride: "D", text: "Disponibilidade — o sistema deixa de atender o uso legítimo." },
+    "Access Control": { stride: "E", text: "Controle de acesso — o atacante passa a fazer o que a política deveria barrar." },
+    Authorization: { stride: "E", text: "Autorização — privilégio ou comando além do permitido." },
+    Authentication: { stride: "S", text: "Autenticação — a identidade não é verificada de fato." },
+    "Non-Repudiation": { stride: "R", text: "Não-repúdio — fica possível negar autoria de uma ação." },
+    Accountability: { stride: "R", text: "Accountability — some a trilha de quem fez o quê (esconder atividades, forjar origem)." },
+    Identity: { stride: "S", text: "Identidade — o atacante assume ou forja quem é o ator." },
+};
+
+function mappingSource() {
+    const source = state.graph?.meta?.sources || {};
+    return source.url || "https://medium.com/@brettcrawley/capec-stride-mapping-1aa83a058c5d";
+}
+
+function capecNode(id) {
+    return state.graph.capecs[id];
+}
+
+function cweNode(id) {
+    return state.graph.cwes[id];
+}
+
+function cveNode(id) {
+    return state.graph.cves[id];
+}
+
+function consequencesForStride(node, letter) {
+    return (node?.consequences || []).filter((row) =>
+        (row.scopes || []).some((scope) => SCOPE_WHY[scope]?.stride === letter)
+    );
+}
+
+function formatConsequences(rows) {
+    return rows
+        .map((row) => {
+            const scopes = (row.scopes || []).join(", ");
+            const impacts = (row.impacts || []).join(", ");
+            const note = row.note ? ` — ${row.note}` : "";
+            return `${scopes}${impacts ? ` / ${impacts}` : ""}${note}`;
+        })
+        .join("; ");
+}
+
+function whyStrideForCapec(capec, letter) {
+    const name = strideName(letter);
+    const parts = [];
+    if ((capec.strideMapped || []).includes(letter)) {
+        parts.push(
+            `Brett Crawley classificou este padrão no mapa CAPEC–STRIDE como <strong>${escapeHtml(name)}</strong>.`
+        );
+    }
+    const inferredRows = consequencesForStride(capec, letter);
+    if ((capec.strideInferred || []).includes(letter) || inferredRows.length) {
+        const detail = formatConsequences(inferredRows) || (capec.scopes || []).join(", ");
+        parts.push(
+            `O MITRE CAPEC declara consequências ${escapeHtml(detail)}, e esse escopo corresponde a <strong>${escapeHtml(name)}</strong>.`
+        );
+    }
+    if (!parts.length && (capec.stride || []).includes(letter)) {
+        parts.push(`Este padrão está associado a <strong>${escapeHtml(name)}</strong> no grafo correlacionado.`);
+    }
+    return parts;
+}
+
+function whyStrideForCwe(cwe, letter) {
+    const name = strideName(letter);
+    const parts = [];
+    if ((cwe.strideFromCapec || []).includes(letter)) {
+        const capecs = (cwe.capecs || [])
+            .filter((id) => (capecNode(id)?.stride || []).includes(letter))
+            .slice(0, 8)
+            .map((id) => `CAPEC-${id}`);
+        parts.push(
+            `Herdado dos padrões de ataque relacionados (${escapeHtml(capecs.join(", ") || "CAPEC")}), já classificados como <strong>${escapeHtml(name)}</strong>.`
+        );
+    }
+    const inferredRows = consequencesForStride(cwe, letter);
+    if ((cwe.strideFromConsequences || []).includes(letter) || inferredRows.length) {
+        const detail = formatConsequences(inferredRows) || (cwe.scopes || []).join(", ");
+        parts.push(
+            `As Common Consequences do CWE incluem ${escapeHtml(detail)}, o que mapeia para <strong>${escapeHtml(name)}</strong>.`
+        );
+    }
+    return parts;
+}
+
+function whyCapecCwe(capecId, cweId) {
+    const capec = capecNode(capecId);
+    const cwe = cweNode(cweId);
+    if (!capec || !cwe) return [];
+    const reasons = new Set([
+        ...((capec.cweWhy && capec.cweWhy[cweId]) || []),
+        ...((cwe.capecWhy && cwe.capecWhy[capecId]) || []),
+    ]);
+    const parts = [];
+    if (reasons.has("capec_related_weakness")) {
+        parts.push(
+            `O MITRE CAPEC lista <strong>CWE-${escapeHtml(cweId)}</strong> em <em>Related Weaknesses</em>: é a fraqueza que o ataque explora.`
+        );
+    }
+    if (reasons.has("cwe_related_attack_pattern")) {
+        parts.push(
+            `O MITRE CWE lista <strong>CAPEC-${escapeHtml(capecId)}</strong> em <em>Related Attack Patterns</em>: este é um modo conhecido de explorar a fraqueza.`
+        );
+    }
+    parts.push(
+        `<strong>CAPEC-${escapeHtml(capecId)} (${escapeHtml(capec.name)})</strong> usa a condição descrita por <strong>CWE-${escapeHtml(cweId)} (${escapeHtml(cwe.name)})</strong>: ${escapeHtml(cwe.summary)}`
+    );
+    return parts;
+}
+
+function whyCweCve(cweId, cveId) {
+    const cwe = cweNode(cweId);
+    const cve = cveNode(cveId);
+    if (!cwe || !cve) return [];
+    const source = (cwe.cveWhy && cwe.cveWhy[cveId]) || (cve.cweWhy && cve.cweWhy[cweId]) || cve.source || "";
+    const parts = [];
+    if (String(source).includes("cwe_observed_example")) {
+        parts.push(
+            `O MITRE CWE cita <strong>${escapeHtml(cveId)}</strong> como exemplo observado de <strong>CWE-${escapeHtml(cweId)}</strong>.`
+        );
+    }
+    if (String(source).includes("cve_problem_type") || String(source).includes("local_cve_json")) {
+        parts.push(
+            `O registro CVE declara <strong>CWE-${escapeHtml(cweId)}</strong> em <em>problemTypes</em>.`
+        );
+    }
+    if (cve.summary || cve.title) {
+        parts.push(escapeHtml(cve.summary || cve.title));
+    }
+    return parts;
+}
+
+function whyBlock(title, openToken, paragraphs) {
+    if (!paragraphs.length) return "";
+    const heading = openToken
+        ? `<button class="chip" data-open="${escapeHtml(openToken)}">${escapeHtml(title)}</button>`
+        : `<h3>${escapeHtml(title)}</h3>`;
+    return `
+        <article class="why">
+            ${heading}
+            ${paragraphs.map((text) => `<p>${text}</p>`).join("")}
+        </article>`;
+}
+
+function whyView(related) {
+    const kind = state.selected.kind;
+    const id = state.selected.id;
+    const blocks = [];
+
+    if (kind === "stride") {
+        const meta = state.graph.stride.find((item) => item.id === id);
+        const mappedIds = [];
+        const inferredIds = [];
+        for (const capecId of related.capecs) {
+            const capec = capecNode(capecId);
+            if (!capec) continue;
+            if ((capec.strideMapped || []).includes(id)) mappedIds.push(capecId);
+            else inferredIds.push(capecId);
+        }
+        blocks.push(
+            whyBlock(
+                `${id} · ${meta?.name || ""}`,
+                null,
+                [
+                    escapeHtml(meta?.description || ""),
+                    `Os CAPEC desta categoria vêm de duas origens: o mapa de <a href="${escapeHtml(mappingSource())}" target="_blank" rel="noopener">Brett Crawley</a> (${mappedIds.length} padrões) e a inferência pelas consequências MITRE (${inferredIds.length} padrões, por exemplo Accountability → Repudiation).`,
+                    `CWE e CVE aparecem porque o MITRE liga CAPEC↔CWE (<em>Related Weaknesses</em> / <em>Related Attack Patterns</em>) e CWE↔CVE (exemplos observados ou problemTypes do CVE).`,
+                ]
+            )
+        );
+        if (mappedIds.length) {
+            blocks.push(
+                whyBlock(
+                    "No mapa Brett Crawley",
+                    null,
+                    [`${mappedIds.map((capecId) => `<button class="chip" data-open="CAPEC-${capecId}">CAPEC-${capecId}</button>`).join(" ")}`]
+                )
+            );
+        }
+        for (const capecId of inferredIds.slice(0, 12)) {
+            const capec = capecNode(capecId);
+            blocks.push(whyBlock(`CAPEC-${capecId} · ${capec?.name || ""}`, `CAPEC-${capecId}`, whyStrideForCapec(capec, id)));
+        }
+        if (inferredIds.length > 12) {
+            blocks.push(`<p class="meta">Mostrando 12 de ${inferredIds.length} CAPECs inferidos. Abra um CAPEC para o detalhe completo.</p>`);
+        }
+        return blocks.join("");
+    }
+
+    if (kind === "capec") {
+        const capec = related.node;
+        for (const letter of capec.stride || []) {
+            blocks.push(whyBlock(strideName(letter), `STRIDE-${letter}`, whyStrideForCapec(capec, letter)));
+        }
+        if (capec.parents?.length) {
+            blocks.push(
+                whyBlock(
+                    `Especialização de ${capec.parents.map((parent) => "CAPEC-" + parent).join(", ")}`,
+                    `CAPEC-${capec.parents[0]}`,
+                    [`MITRE marca este padrão como filho (ChildOf) de ${escapeHtml(capec.parents.map((parent) => `CAPEC-${parent} (${capecNode(parent)?.name || ""})`).join(", "))}.`]
+                )
+            );
+        }
+        for (const cweId of (capec.cwes || []).slice(0, 12)) {
+            blocks.push(whyBlock(`CWE-${cweId} · ${cweNode(cweId)?.name || ""}`, `CWE-${cweId}`, whyCapecCwe(id, cweId)));
+        }
+        return blocks.join("") || `<p class="meta">Não há texto de origem para este recorte.</p>`;
+    }
+
+    if (kind === "cwe") {
+        const cwe = related.node;
+        for (const letter of cwe.stride || []) {
+            blocks.push(whyBlock(strideName(letter), `STRIDE-${letter}`, whyStrideForCwe(cwe, letter)));
+        }
+        for (const capecId of (cwe.capecs || []).slice(0, 12)) {
+            blocks.push(whyBlock(`CAPEC-${capecId} · ${capecNode(capecId)?.name || ""}`, `CAPEC-${capecId}`, whyCapecCwe(capecId, id)));
+        }
+        for (const cveId of (cwe.cves || []).slice(0, 8)) {
+            blocks.push(whyBlock(cveId, cveId, whyCweCve(id, cveId)));
+        }
+        return blocks.join("") || `<p class="meta">Não há texto de origem para este recorte.</p>`;
+    }
+
+    const cve = related.node;
+    for (const letter of cve.stride || []) {
+        blocks.push(
+            whyBlock(
+                strideName(letter),
+                `STRIDE-${letter}`,
+                [`O CVE herda STRIDE dos CWE que declara: ${(cve.cwes || []).map((cweId) => "CWE-" + cweId).join(", ") || "nenhum CWE"}.`]
+            )
+        );
+    }
+    for (const cweId of (cve.cwes || []).slice(0, 12)) {
+        blocks.push(whyBlock(`CWE-${cweId} · ${cweNode(cweId)?.name || ""}`, `CWE-${cweId}`, whyCweCve(cweId, id)));
+    }
+    return blocks.join("") || `<p class="meta">Não há texto de origem para este recorte.</p>`;
+}
+
 function renderDetail() {
     if (!state.selected) {
         els.detailPane.innerHTML = `<p class="placeholder">Selecione um item para ver CAPEC, CWE, CVE e como detectar no código.</p>`;
@@ -297,10 +540,11 @@ function renderDetail() {
         ${node?.severity ? `<p class="meta">Severidade CAPEC: ${escapeHtml(node.severity)} · Likelihood: ${escapeHtml(node.likelihood || "n/a")}</p>` : ""}
         <div class="tabs">
             <button data-tab="related" class="${state.tab === "related" ? "active" : ""}">Relacionados</button>
+            <button data-tab="why" class="${state.tab === "why" ? "active" : ""}">Por que se relacionam</button>
             <button data-tab="code" class="${state.tab === "code" ? "active" : ""}">Como achar no código</button>
         </div>
         ${state.tab === "code" && heuristics[0] ? `<p><strong>${escapeHtml(heuristics[0].codeQuestion)}</strong></p><p class="meta">${escapeHtml(state.catalog.intro)}</p>` : ""}
-        ${state.tab === "related" ? relatedView : codeView}
+        ${state.tab === "related" ? relatedView : state.tab === "why" ? whyView(related) : codeView}
     `;
 }
 
@@ -323,7 +567,7 @@ function openItem(kind, id) {
         return;
     }
     state.selected = { kind, id };
-    state.tab = "related";
+    state.tab = "why";
     const related = relatedFor(kind, id);
     if (state.stride && related && !(related.stride || []).includes(state.stride)) {
         state.stride = null;
